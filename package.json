@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "serverless-offline": "^3.25.14",
+    "serverless-offline-scheduler": "^0.3.4"
+  },
+  "dependencies": {
+    "mastodon": "^1.2.2",
+    "request": "^2.88.0",
+    "request-promise": "^4.2.2",
+    "twitter": "^1.7.1"
+  }
+}
