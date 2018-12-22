@@ -40,8 +40,8 @@ const webhookGet = async (event, context) => {
 };
 
 const webhookPost = async (event, context) => {
-  const signature = event.headers['X-Hub-Signature'].split('=')[1];
-  const linkValid = event.headers['Link'] && event.headers['Link'].includes(TOPIC_URL);
+  const signature = event.headers['x-hub-signature'].split('=')[1];
+  const linkValid = event.headers['link'] && event.headers['link'].includes(TOPIC_URL);
   const sigValid = crypto.createHmac('sha256', SECRET).update(event.body).digest('hex') === signature;
   const body = event.body && JSON.parse(event.body);
   const isUpAndForUs = body['data'][0]['user_id'] === `${USER_ID}`;
