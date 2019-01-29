@@ -6,6 +6,9 @@ const Twitter = require('twitter');
 const Masto = require('mastodon');
 const Articles = require('articles');
 const { get } = require('lodash');
+const bluebird = require('bluebird');
+const redis = require('redis');
+bluebird.promisifyAll(redis);
 
 const SECRET = process.env.SIGNING_SECRET;
 const USER_ID = process.env.USER_ID;
@@ -13,6 +16,9 @@ const USERNAME = process.env.USERNAME;
 const CLIENT_ID = process.env.CLIENT_ID;
 const TOPIC_URL = `https://api.twitch.tv/helix/streams?user_id=${USER_ID}`;
 const URL_BASE = process.env.URL_BASE; // No slash at end
+const REDIS_KEY = `${USER_ID}-channel-status`;
+
+const redisClient = redis.createClient(process.env.REDIS_PORT, process.env.REDIS_HOST);
 
 const twitterClient = new Twitter({
   consumer_key: process.env.TWITTER_CONSUMER_KEY,
@@ -79,23 +85,37 @@ const webhookPost = async (req, res, _next) => {
 https://twitch.tv/${USERNAME}`;
         console.log('message', JSON.stringify(message));
 
-        // twitterClient.post('statuses/update', { status: message }, (err, tweet, response) => {
-        //   if (err) console.error(err);
-        //   // console.log(err, tweet, response);
-        // });
+        const currentVal = (await redisClient.getAsync(REDIS_KEY)) || 'offline';
+        console.log('currentVal', currentVal);
 
-        // mastoClient.post('statuses', { status: message })
-        // .then(response => {
-        //   // console.log(response);
-        // })
-        // .catch(err => {
-        //   console.error(err);
-        // });
+        if (currentVal === 'offline') {
+          console.log('!!!!!!sending notifications!!!!!!');
 
-        // TODO: Save up value here
+          twitterClient.post('statuses/update', { status: message }, (err, tweet, response) => {
+            if (err) console.error(err);
+            console.log(err, tweet, response);
+          });
+
+          mastoClient.post('statuses', { status: message })
+          .then(response => {
+            console.log(response);
+          })
+          .catch(err => {
+            console.error(err);
+          });
+        }
+
+        // Give it a maximum time so that if we never get the offline message
+        // at least it'll work the next time (> 12 hours later) that you go online
+        await redisClient.setAsync(REDIS_KEY, 'online', 'EX', 60*60*12);
       })();
     } else {
-      // TODO: Save down value here
+      (async function() {
+        console.log('Setting offline');
+        // No expiration time.  There isn't really a reason since we default to offline
+        // if there is no value anyway
+        await redisClient.setAsync(REDIS_KEY, 'offline');
+      })();
     }
 
     return res.status(200).send('OK');
