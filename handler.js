@@ -4,6 +4,7 @@ const request = require('request-promise');
 const crypto = require('crypto');
 const Twitter = require('twitter');
 const Masto = require('mastodon');
+const Articles = require('articles');
 const { get } = require('lodash');
 
 const SECRET = process.env.SIGNING_SECRET;
@@ -26,48 +27,39 @@ var mastoClient = new Masto({
   api_url: process.env.MASTODON_API_URL, // Slash at end
 });
 
-const webhookGet = async (event, context) => {
-  if (event.queryStringParameters['hub.challenge'] && (event.queryStringParameters['hub.mode'] === 'subscribe' || event.queryStringParameters['hub.mode'] === 'unsubscribe')) {
-    return {
-      statusCode: 200,
-      body: event.queryStringParameters['hub.challenge'],
-    };
+const webhookGet = async (req, res, _next) => {
+  if (req.query['hub.challenge'] && (req.query['hub.mode'] === 'subscribe' || req.query['hub.mode'] === 'unsubscribe')) {
+    return res.status(200).send(req.query['hub.challenge']);
   } else {
-    return {
-      statusCode: 400,
-      body: 'ERROR: Invalid request!',
-    };
+    return res.status(400).send('ERROR: Invalid request!');
   }
 };
 
-const webhookPost = async (event, context) => {
-  const headers = Object.keys(event.headers);
-  for (const key of headers) {
-    event.headers[key.toLowerCase()] = event.headers[key];
-  }
-
-  console.log('headers', JSON.stringify(event.headers));
-  const signature = get(event, 'headers.x-hub-signature', '=').split('=')[1];
-  console.log('signature', signature);
-  const linkValid = get(event, 'headers.link', '').includes(TOPIC_URL);
-  console.log('linkValid', linkValid);
-  const body = JSON.parse(get(event, 'body', '{}'));
-  console.log('body', body);
-  const localSig = crypto.createHmac('sha256', SECRET).update(get(event, 'body', '')).digest('hex');
+const webhookPost = async (req, res, _next) => {
+  const signature = (req.get('x-hub-signature') || '=').split('=')[1];
+  const linkValid = (req.get('link') || '').includes(TOPIC_URL);
+  const localSig = crypto.createHmac('sha256', SECRET).update(get(req, 'rawBody', '')).digest('hex');
   const sigValid = localSig === signature;
+  const isUp = !!get(req, 'body.data.0', false);
+
+  console.log('headers', JSON.stringify(get(req, 'headers', '{}')));
+  console.log('signature', signature);
+  console.log('linkValid', linkValid);
+  console.log('body', req.body);
   console.log('sigValid', sigValid, localSig, signature);
-  const isUpAndForUs = get(body, 'data.0.user_id', '') === `${USER_ID}`;
-  console.log('isUpAndForUs', isUpAndForUs, get(body, 'data.0.user_id', ''), USER_ID);
+  console.log('isUp', isUp, get(req, 'body.data.0', ''));
 
   //TODO: How do we know this is actually us going live, or just a title/game change?
   //This could trigger false positives...  gross
   if (linkValid && sigValid) {
     console.info('link and sig are valid');
-    if (isUpAndForUs) {
+    if (isUp) {
+      console.info('is up');
+
       // This is all async
       (async function() {
-        const gameId = get(body, 'data.0.game_id', 0);
-        const title = get(body, 'data.0.title', '');
+        const gameId = get(req, 'body.data.0.game_id', 0);
+        const title = get(req, 'body.data.0.title', '');
 
         const gameData = await request({
           uri: `https://api.twitch.tv/helix/games?id=${gameId}`,
@@ -81,43 +73,39 @@ const webhookPost = async (event, context) => {
 
         console.log('gameData', JSON.stringify(gameData));
 
-        const currentGame = get(gameData, 'data.0.name', 'n/a');
-        const message = `Starting up a ${currentGame} stream: ${title}
+        const currentGame = get(gameData, 'data.0.name', 'Unknown');
+        const message = `Starting up ${Articles.articlize(currentGame)} stream: ${title}
 
 https://twitch.tv/${USERNAME}`;
         console.log('message', JSON.stringify(message));
 
-        twitterClient.post('statuses/update', { status: message }, (err, tweet, response) => {
-          if (err) console.error(err);
-          // console.log(err, tweet, response);
-        });
+        // twitterClient.post('statuses/update', { status: message }, (err, tweet, response) => {
+        //   if (err) console.error(err);
+        //   // console.log(err, tweet, response);
+        // });
 
-        mastoClient.post('statuses', { status: message })
-        .then(response => {
-          // console.log(response);
-        })
-        .catch(err => {
-          console.error(err);
-        });
+        // mastoClient.post('statuses', { status: message })
+        // .then(response => {
+        //   // console.log(response);
+        // })
+        // .catch(err => {
+        //   console.error(err);
+        // });
+
+        // TODO: Save up value here
       })();
+    } else {
+      // TODO: Save down value here
     }
 
-    return {
-      statusCode: 200,
-      body: '{}',
-    };
+    return res.status(200).send('OK');
   } else {
     console.error('failed', linkValid, sigValid);
-    return {
-      statusCode: 400,
-      body: JSON.stringify({
-        error: 'ERROR: Invalid request!'
-      }),
-    };
+    return res.status(400).send('ERROR: Invalid request!');
   }
 };
 
-const register = async (event, context) => {
+const register = async (_req, res, _next) => {
   const registration = await request({
     method: 'POST',
     uri: 'https://api.twitch.tv/helix/webhooks/hub',
@@ -135,16 +123,10 @@ const register = async (event, context) => {
     json: true,
   });
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({
-      message: 'Go Serverless v1.0! Your function executed successfully!',
-      input: event,
-    }),
-  };
+  return res.status(200).send('OK');
 };
 
-const unregister = async (event, context) => {
+const unregister = async (_req, res, _next) => {
   const registration = await request({
     method: 'POST',
     uri: 'https://api.twitch.tv/helix/webhooks/hub',
@@ -162,13 +144,7 @@ const unregister = async (event, context) => {
     json: true,
   });
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({
-      message: 'Go Serverless v1.0! Your function executed successfully!',
-      input: event,
-    }),
-  };
+  return res.status(200).send('OK');
 };
 
 module.exports = {
@@ -176,15 +152,4 @@ module.exports = {
   webhookPost,
   register,
   unregister,
-  // test: async (event, context) => {
-  //   console.log(process.env);
-
-  //   return {
-  //     statusCode: 200,
-  //     body: JSON.stringify({
-  //       message: 'Go Serverless v1.0! Your function executed successfully!',
-  //       input: event,
-  //     }),
-  //   };
-  // },
 };
