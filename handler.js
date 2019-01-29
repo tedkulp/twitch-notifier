@@ -4,6 +4,7 @@ const request = require('request-promise');
 const crypto = require('crypto');
 const Twitter = require('twitter');
 const Masto = require('mastodon');
+const { get } = require('lodash');
 
 const SECRET = process.env.SIGNING_SECRET;
 const USER_ID = process.env.USER_ID;
@@ -40,18 +41,33 @@ const webhookGet = async (event, context) => {
 };
 
 const webhookPost = async (event, context) => {
-  const signature = event.headers['x-hub-signature'].split('=')[1];
-  const linkValid = event.headers['link'] && event.headers['link'].includes(TOPIC_URL);
-  const sigValid = crypto.createHmac('sha256', SECRET).update(event.body).digest('hex') === signature;
-  const body = event.body && JSON.parse(event.body);
-  const isUpAndForUs = body['data'][0]['user_id'] === `${USER_ID}`;
+  const headers = Object.keys(event.headers);
+  for (const key of headers) {
+    event.headers[key.toLowerCase()] = event.headers[key];
+  }
 
+  console.log('headers', JSON.stringify(event.headers));
+  const signature = get(event, 'headers.x-hub-signature', '=').split('=')[1];
+  console.log('signature', signature);
+  const linkValid = get(event, 'headers.link', '').includes(TOPIC_URL);
+  console.log('linkValid', linkValid);
+  const body = JSON.parse(get(event, 'body', '{}'));
+  console.log('body', body);
+  const localSig = crypto.createHmac('sha256', SECRET).update(get(event, 'body', '')).digest('hex');
+  const sigValid = localSig === signature;
+  console.log('sigValid', sigValid, localSig, signature);
+  const isUpAndForUs = get(body, 'data.0.user_id', '') === `${USER_ID}`;
+  console.log('isUpAndForUs', isUpAndForUs, get(body, 'data.0.user_id', ''), USER_ID);
+
+  //TODO: How do we know this is actually us going live, or just a title/game change?
+  //This could trigger false positives...  gross
   if (linkValid && sigValid) {
+    console.info('link and sig are valid');
     if (isUpAndForUs) {
       // This is all async
       (async function() {
-        const gameId = body['data'][0]['game_id'];
-        const title = body['data'][0]['title'];
+        const gameId = get(body, 'data.0.game_id', 0);
+        const title = get(body, 'data.0.title', '');
 
         const gameData = await request({
           uri: `https://api.twitch.tv/helix/games?id=${gameId}`,
@@ -63,12 +79,16 @@ const webhookPost = async (event, context) => {
           },
         });
 
-        const currentGame = gameData && gameData['data'][0]['name'];
+        console.log('gameData', JSON.stringify(gameData));
+
+        const currentGame = get(gameData, 'data.0.name', 'n/a');
         const message = `Starting up a ${currentGame} stream: ${title}
 
 https://twitch.tv/${USERNAME}`;
+        console.log('message', JSON.stringify(message));
+
         twitterClient.post('statuses/update', { status: message }, (err, tweet, response) => {
-          if (err) console.log(err);
+          if (err) console.error(err);
           // console.log(err, tweet, response);
         });
 
@@ -77,7 +97,7 @@ https://twitch.tv/${USERNAME}`;
           // console.log(response);
         })
         .catch(err => {
-          console.log(err);
+          console.error(err);
         });
       })();
     }
@@ -87,7 +107,7 @@ https://twitch.tv/${USERNAME}`;
       body: '{}',
     };
   } else {
-    console.log('failed', linkValid, sigValid);
+    console.error('failed', linkValid, sigValid);
     return {
       statusCode: 400,
       body: JSON.stringify({
