@@ -16,10 +16,6 @@ Create a copy of the env file
 
 Fill in with all your deets.  Then:
 
-    yarn install
-
-or:
-
     npm install
 
 ## Deployment
